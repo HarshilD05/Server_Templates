@@ -1,0 +1,278 @@
+"""
+User utility functions for user management operations
+"""
+
+from datetime import datetime
+from typing import Optional, Dict, Any
+from bson import ObjectId
+from models import UserModel
+from config.mongodb import get_mongodb_collection
+from utils.password_utils import PasswordUtils
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class UserUtils:
+    """Utility class for user operations"""
+    
+    @staticmethod
+    def create_user(email: str, user_type: str, password: Optional[str] = None) -> Optional[str]:
+        """
+        Create a new user
+        
+        Args:
+            email: User email address
+            user_type: User type (ADMIN, USER)
+            password: Plain text password (optional, will be hashed if provided)
+            
+        Returns:
+            User ID as string if successful, None if failed
+        """
+        try:
+            # Hash password if provided
+            password_hash = None
+            if password:
+                password_hash = PasswordUtils.hash_password(password)
+            
+            # Create user model
+            user = UserModel(
+                email=email,
+                user_type=user_type,
+                password_hash=password_hash,
+                chats=[],
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            
+            # Insert into MongoDB
+            users_collection = get_mongodb_collection('users')
+            result = users_collection.insert_one(user.dict())
+            
+            if result.inserted_id:
+                user_id = str(result.inserted_id)
+                logger.info(f"[UserUtils] Created new user {user_id}")
+                return user_id
+            else:
+                logger.error(f"[UserUtils] Failed to insert user into database")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[UserUtils] Error creating user: {e}")
+            return None
+    
+    @staticmethod
+    def get_user(user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get user by ID
+        
+        Args:
+            user_id: User ObjectId as string
+            
+        Returns:
+            User document or None
+        """
+        try:
+            users_collection = get_mongodb_collection('users')
+            user = users_collection.find_one({"_id": ObjectId(user_id)})
+            
+            if user:
+                # Convert ObjectId to string for JSON serialization
+                user['_id'] = str(user['_id'])
+                return user
+            return None
+            
+        except Exception as e:
+            logger.error(f"[UserUtils] Error getting user: {e}")
+            return None
+    
+    @staticmethod
+    def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+        """
+        Get user by email
+        
+        Args:
+            email: User email address
+            
+        Returns:
+            User document or None
+        """
+        try:
+            users_collection = get_mongodb_collection('users')
+            user = users_collection.find_one({"email": email})
+            
+            if user:
+                # Convert ObjectId to string for JSON serialization
+                user['_id'] = str(user['_id'])
+                return user
+            return None
+            
+        except Exception as e:
+            logger.error(f"[UserUtils] Error getting user by email: {e}")
+            return None
+    
+    @staticmethod
+    def get_all_users(limit: int = 50, skip: int = 0) -> list:
+        """
+        Get all users with pagination
+        
+        Args:
+            limit: Maximum number of users to return (default: 50, max: 100)
+            skip: Number of users to skip for pagination (default: 0)
+            
+        Returns:
+            List of user dictionaries
+        """
+        try:
+            users_collection = get_mongodb_collection('users')
+            
+            # Ensure limit doesn't exceed maximum
+            limit = min(limit, 100)
+            
+            # Get users with pagination
+            cursor = users_collection.find().skip(skip).limit(limit)
+            users = []
+            
+            for user_doc in cursor:
+                # Convert ObjectId to string
+                user_doc['_id'] = str(user_doc['_id'])
+                
+                # Convert datetime to ISO string if present
+                if 'created_at' in user_doc:
+                    user_doc['created_at'] = user_doc['created_at'].isoformat()
+                if 'updated_at' in user_doc:
+                    user_doc['updated_at'] = user_doc['updated_at'].isoformat()
+                    
+                users.append(user_doc)
+            
+            logger.info(f"[UserUtils] Retrieved {len(users)} users (limit: {limit}, skip: {skip})")
+            return users
+            
+        except Exception as e:
+            logger.error(f"[UserUtils] Error getting all users: {e}")
+            return []
+    
+    @staticmethod
+    def update_user(user_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update user information
+        
+        Args:
+            user_id: User ObjectId as string
+            update_data: Dictionary of fields to update
+            
+        Returns:
+            True if successful, False if failed
+        """
+        try:
+            users_collection = get_mongodb_collection('users')
+            
+            # Add updated timestamp
+            update_data['updated_at'] = datetime.utcnow()
+            
+            result = users_collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": update_data}
+            )
+            
+            if result.modified_count > 0:
+                logger.info(f"[UserUtils] Updated user {user_id}")
+                return True
+            else:
+                logger.warning(f"[UserUtils] No user found with ID {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"[UserUtils] Error updating user: {e}")
+            return False
+    
+    @staticmethod
+    def delete_user(user_id: str) -> bool:
+        """
+        Delete a user
+        
+        Args:
+            user_id: User ObjectId as string
+            
+        Returns:
+            True if successful, False if failed
+        """
+        try:
+            users_collection = get_mongodb_collection('users')
+            result = users_collection.delete_one({"_id": ObjectId(user_id)})
+            
+            if result.deleted_count > 0:
+                logger.info(f"[UserUtils] Deleted user {user_id}")
+                return True
+            else:
+                logger.warning(f"[UserUtils] No user found with ID {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"[UserUtils] Error deleting user: {e}")
+            return False
+    
+    @staticmethod
+    def verify_user_password(user_id: str, password: str) -> bool:
+        """
+        Verify a user's password
+        
+        Args:
+            user_id: User ObjectId as string
+            password: Plain text password to verify
+            
+        Returns:
+            True if password matches, False otherwise
+        """
+        try:
+            user = UserUtils.get_user(user_id)
+            if not user or not user.get('password_hash'):
+                logger.warning(f"[UserUtils] User {user_id} not found or has no password")
+                return False
+            
+            return PasswordUtils.verify_password(password, user['password_hash'])
+            
+        except Exception as e:
+            logger.error(f"[UserUtils] Error verifying password: {e}")
+            return False
+    
+    @staticmethod
+    def update_user_password(user_id: str, new_password: str) -> bool:
+        """
+        Update a user's password
+        
+        Args:
+            user_id: User ObjectId as string
+            new_password: New plain text password (will be hashed)
+            
+        Returns:
+            True if successful, False if failed
+        """
+        try:
+            # Hash the new password
+            password_hash = PasswordUtils.hash_password(new_password)
+            
+            # Update in database
+            users_collection = get_mongodb_collection('users')
+            result = users_collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {
+                    "password_hash": password_hash,
+                    "updated_at": datetime.utcnow()
+                }}
+            )
+            
+            if result.modified_count > 0:
+                logger.info(f"[UserUtils] Updated password for user {user_id}")
+                return True
+            else:
+                logger.warning(f"[UserUtils] No user found with ID {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"[UserUtils] Error updating password: {e}")
+            return False
+
+
+# Default export
+__all__ = ['UserUtils']

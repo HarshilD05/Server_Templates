@@ -1,0 +1,10 @@
+# Environment
+.venv/
+.env
+
+# IDE
+.vscode/
+
+# Py Cached Files
+__pycache__/
+*.pyc
